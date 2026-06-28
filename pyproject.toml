@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rpm-fetch"
+version = "0.1.0"
+description = "Warm an Artifactory cache from an RPM repository's metadata using HEAD requests."
+readme = "README.md"
+# 3.14 is the floor: it is the first release to ship `compression.zstd` in the
+# stdlib, which lets us read zstd-compressed repodata with zero dependencies.
+requires-python = ">=3.14"
+license = "MIT"
+authors = [{ name = "Nathan Towell", email = "nathan.j.towell@protonmail.com" }]
+keywords = ["rpm", "yum", "dnf", "artifactory", "repodata", "cache"]
+dependencies = []
+
+[project.scripts]
+rpm-fetch = "rpm_fetch.cli:main"
+
+# Flat layout: the package lives at the repo root. List it explicitly so the
+# build never sweeps `tests` (or the local `.venv`) into the distribution.
+[tool.setuptools]
+packages = ["rpm_fetch"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py314"

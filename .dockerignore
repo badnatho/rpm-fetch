@@ -1,0 +1,37 @@
+# Keep the build context small and secrets out of the image.
+
+# Secrets — never copy a token into the build context.
+token.txt
+*.token
+
+# Virtualenvs and VCS
+.venv/
+venv/
+.git/
+.gitignore
+
+# Byte-compiled / build artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editor / agent / CI metadata not needed in the image
+.claude/
+.github/
+
+# Docs and tests aren't needed at runtime (README.md is copied explicitly).
+tests/
+CLAUDE.md
+Dockerfile
+.dockerignore
