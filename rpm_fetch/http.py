@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import http.client
+import random
 import ssl
 import time
 import urllib.error
@@ -40,6 +41,31 @@ RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _TRANSIENT_ERRORS = (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException)
 
 _DEFAULT_USER_AGENT = f"rpm-fetch/{__version__}"
+
+# Ceiling on a server-supplied Retry-After, so a hostile/buggy header can't
+# park a worker thread for an hour.
+_RETRY_AFTER_CAP = 60.0
+
+# Ceiling for whole-body buffering in get_bytes. repomd.xml is a few KB; 64 MiB
+# is generous headroom while keeping a hostile server from exhausting memory.
+_MAX_BUFFERED_BYTES = 64 * 1024 * 1024
+
+
+def _retry_after_seconds(exc: Exception | None) -> float | None:
+    """Server-requested delay from a response's Retry-After header, if usable.
+
+    Only the delta-seconds form is parsed; the HTTP-date form (rare on 429/503)
+    falls back to our own backoff.
+    """
+    headers = getattr(exc, "headers", None)
+    value = headers.get("Retry-After") if headers is not None else None
+    if value is None:
+        return None
+    try:
+        seconds = float(value.strip())
+    except (ValueError, AttributeError):
+        return None
+    return seconds if seconds >= 0 else None
 
 # Headers carrying credentials, stripped when a redirect leaves the origin.
 _CREDENTIAL_HEADERS = frozenset({"authorization", "x-jfrog-art-api", "cookie"})
@@ -167,12 +193,14 @@ class HttpClient:
         backoff_base: float = 0.5,
         backoff_cap: float = 10.0,
         sleep=time.sleep,
+        jitter=lambda backoff: random.uniform(0, backoff / 2),
     ) -> None:
         self.timeout = timeout
         self.retries = max(0, retries)  # negative would make the attempt loop empty
         self.backoff_base = backoff_base
         self.backoff_cap = backoff_cap
         self._sleep = sleep
+        self._jitter = jitter
         self._base_headers = {"User-Agent": user_agent, **(auth or Auth()).headers()}
 
         # Replaces urllib's default redirect handler (build_opener prefers a
@@ -182,7 +210,10 @@ class HttpClient:
         if insecure:
             # Corporate Artifactory often sits behind an internal CA; --insecure
             # trades verification for "it works on the VPN".
-            handlers.append(urllib.request.HTTPSHandler(context=ssl._create_unverified_context()))
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            handlers.append(urllib.request.HTTPSHandler(context=context))
         self._opener = urllib.request.build_opener(*handlers)
 
     def _request(self, url: str, method: str) -> urllib.request.Request:
@@ -190,6 +221,16 @@ class HttpClient:
 
     def _backoff(self, attempt: int) -> float:
         return min(self.backoff_base * (2 ** (attempt - 1)), self.backoff_cap)
+
+    def _retry_delay(self, attempt: int, exc: Exception | None = None) -> float:
+        """Delay before retry *attempt*: the server's Retry-After when it sent
+        one (capped), else exponential backoff plus jitter so concurrent workers
+        that hit a 429 together don't all re-slam the server in lockstep."""
+        retry_after = _retry_after_seconds(exc)
+        if retry_after is not None:
+            return min(retry_after, _RETRY_AFTER_CAP)
+        backoff = self._backoff(attempt)
+        return backoff + self._jitter(backoff)
 
     def _open_with_retries(self, url: str, method: str):
         """Open *url*, retrying transient failures, and return the live response.
@@ -207,13 +248,13 @@ class HttpClient:
                 if exc.code in RETRYABLE_STATUS and attempt <= self.retries:
                     exc.close()  # an HTTPError is the live response; free its socket before retrying
                     last_exc = exc
-                    self._sleep(self._backoff(attempt))
+                    self._sleep(self._retry_delay(attempt, exc))
                     continue
                 raise _with_response_body(exc, url)
             except _TRANSIENT_ERRORS as exc:
                 last_exc = exc
                 if attempt <= self.retries:
-                    self._sleep(self._backoff(attempt))
+                    self._sleep(self._retry_delay(attempt, exc))
                     continue
                 raise
         # Unreachable: retries >= 0 guarantees >= 1 attempt, and every attempt
@@ -223,11 +264,18 @@ class HttpClient:
     def get_bytes(self, url: str) -> bytes:
         """GET *url* and return the full body, retrying transient failures.
 
-        Used for small metadata (repomd.xml) where buffering is fine. Raises on
-        final failure — a missing repomd is fatal to the whole run.
+        Used for small metadata (repomd.xml) where buffering is fine — hence the
+        size cap: a hostile or broken server must not be able to balloon this
+        buffer. Raises on final failure — a missing repomd is fatal to the run.
         """
         with self._open_with_retries(url, "GET") as resp:
-            return resp.read()
+            data = resp.read(_MAX_BUFFERED_BYTES + 1)
+            if len(data) > _MAX_BUFFERED_BYTES:
+                raise OSError(
+                    f"response for {url} exceeds {_MAX_BUFFERED_BYTES} bytes; "
+                    "refusing to buffer it in memory"
+                )
+            return data
 
     @contextlib.contextmanager
     def open_stream(self, url: str) -> Iterator[BinaryIO]:
@@ -265,13 +313,13 @@ class HttpClient:
                 exc.close()  # an HTTPError is itself the response; free its socket
                 if exc.code in RETRYABLE_STATUS and attempt <= self.retries:
                     last_error = f"HTTP {exc.code}"
-                    self._sleep(self._backoff(attempt))
+                    self._sleep(self._retry_delay(attempt, exc))
                     continue
                 return WarmResult(url, exc.code, False, f"HTTP {exc.code}", attempt, time.monotonic() - start)
             except _TRANSIENT_ERRORS as exc:
                 last_error = _describe(exc)
                 if attempt <= self.retries:
-                    self._sleep(self._backoff(attempt))
+                    self._sleep(self._retry_delay(attempt, exc))
                     continue
                 return WarmResult(url, None, False, last_error, attempt, time.monotonic() - start)
         # Unreachable: every path above returns or continues.

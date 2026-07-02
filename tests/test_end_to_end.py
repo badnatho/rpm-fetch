@@ -31,7 +31,10 @@ PRIMARY = b"""<?xml version="1.0" encoding="UTF-8"?>
 </metadata>
 """
 
-EXPECTED_PACKAGES = {
+# Warming covers the repo's metadata files as well as every package.
+EXPECTED_WARMED = {
+    "/repo/repodata/repomd.xml",
+    "/repo/repodata/primary.xml.gz",
     "/repo/Packages/a/alpha-1.0-1.x86_64.rpm",
     "/repo/Packages/b/beta-2.0-1.noarch.rpm",
     "/repo/Packages/g/gamma-3.0-1.x86_64.rpm",
@@ -97,17 +100,19 @@ class EndToEndTests(unittest.TestCase):
             code = main([self.base_url, *args])
         return code, out.getvalue(), err.getvalue()
 
-    def test_head_warms_every_package(self):
+    def test_head_warms_metadata_and_every_package(self):
         code, _out, err = self._run("--quiet")
         self.assertEqual(code, 0, msg=err)
         head_paths = {path for method, path in self.recorder if method == "HEAD"}
-        self.assertEqual(head_paths, EXPECTED_PACKAGES)
+        self.assertEqual(head_paths, EXPECTED_WARMED)
 
     def test_dry_run_lists_urls_without_requesting(self):
         code, out, _err = self._run("--dry-run")
         self.assertEqual(code, 0)
         listed = {line.strip() for line in out.splitlines() if line.strip()}
         self.assertEqual(listed, {self.base_url + p for p in (
+            "repodata/repomd.xml",
+            "repodata/primary.xml.gz",
             "Packages/a/alpha-1.0-1.x86_64.rpm",
             "Packages/b/beta-2.0-1.noarch.rpm",
             "Packages/g/gamma-3.0-1.x86_64.rpm",

@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rpm-fetch"
-version = "0.1.0"
+# Single-sourced: the version lives only in rpm_fetch/__init__.py.
+dynamic = ["version"]
 description = "Warm an Artifactory cache from an RPM repository's metadata using HEAD requests."
 readme = "README.md"
 # 3.14 is the floor: it is the first release to ship `compression.zstd` in the
@@ -22,6 +23,9 @@ rpm-fetch = "rpm_fetch.cli:main"
 # build never sweeps `tests` (or the local `.venv`) into the distribution.
 [tool.setuptools]
 packages = ["rpm_fetch"]
+
+[tool.setuptools.dynamic]
+version = { attr = "rpm_fetch.__version__" }
 
 [tool.ruff]
 line-length = 110

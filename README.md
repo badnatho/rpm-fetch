@@ -11,6 +11,9 @@ for the packages.
   `compression.zstd` module added in **Python 3.14** (hence the 3.14 floor).
 - **Streaming metadata parse.** `primary.xml` is parsed incrementally, so a
   full-distro repo with hundreds of thousands of packages stays memory-flat.
+- **Metadata warmed too.** The repo's own `repodata/` files (repomd.xml,
+  filelists, updateinfo, comps, ...) are warmed ahead of the packages — they are
+  the first thing a dnf client asks for.
 
 ## Requirements
 
@@ -59,10 +62,10 @@ shell history and `ps` output). Precedence: token → basic → API key.
 | `--method {HEAD,GET}`  | `HEAD`  | Request method per package (see note below).                  |
 | `--concurrency N`      | `16`    | Maximum in-flight requests.                                   |
 | `--timeout SECS`       | `30`    | Per-request timeout.                                          |
-| `--retries N`          | `2`     | Retries on `429`/`5xx`/network errors (exponential backoff).  |
+| `--retries N`          | `2`     | Retries on `429`/`5xx`/network errors (honours `Retry-After`, else jittered exponential backoff). |
 | `--insecure`           | off     | Skip TLS verification (internal CAs / self-signed certs).     |
 | `--metadata-base-url`  | repo URL| Read repodata from a different base than the warm target.     |
-| `--limit N`            | —       | Only process the first N packages (handy for a smoke test).   |
+| `--limit N`            | —       | Only process the first N URLs (metadata first; handy for a smoke test). |
 | `--dry-run`            | off     | Print the package URLs that *would* be warmed, then exit.     |
 | `--fail-fast`          | off     | Stop scheduling new requests after the first failure.         |
 | `--verbose` / `--quiet`| —       | Per-request logging / summary-only.                           |

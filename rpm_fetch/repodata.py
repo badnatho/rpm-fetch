@@ -76,6 +76,14 @@ def parse_repomd(data: bytes) -> dict[str, str]:
 
     e.g. ``{"primary": "repodata/<hash>-primary.xml.zst", "filelists": ...}``.
     """
+    # A server that redirects to a login/landing page (e.g. a suspended JFrog
+    # trial) returns HTML here; say so instead of a confusing XML parse error
+    # (or, for well-formed XHTML, "no <data> entries").
+    if data.lstrip()[:15].lower().startswith((b"<!doctype html", b"<html")):
+        raise RepoMetadataError(
+            "repomd.xml request returned an HTML page, not repodata — "
+            "check the repository URL, credentials, and server status"
+        )
     try:
         root = ET.fromstring(data)
     except ET.ParseError as exc:
@@ -149,7 +157,15 @@ def discover_package_urls(
     repo_base_url: str,
     metadata_base_url: str | None = None,
 ) -> list[str]:
-    """Resolve every package into an absolute URL under *repo_base_url*.
+    """Resolve everything worth warming into absolute URLs under *repo_base_url*.
+
+    The result starts with the repository's own metadata files — ``repomd.xml``
+    plus every ``<data>`` location it lists (filelists, updateinfo, comps, ...) —
+    followed by every package. A dnf client asks for the metadata *first*, so
+    warming only packages would leave the first client with cache misses on
+    exactly the files it needs to begin. This also matters with
+    *metadata_base_url*: repodata is *read* from there, but the warm target's own
+    copies still need requests sent at *repo_base_url*.
 
     *source* is either an ``HttpClient``-like object (``get_bytes`` +
     ``open_stream``) or a ``Callable[[str], bytes]``; see :func:`_resolve_source`.
@@ -157,19 +173,24 @@ def discover_package_urls(
     memory stays flat; with a bare callable it is buffered then decompressed.
 
     *metadata_base_url* lets the repodata be read from somewhere other than the
-    warm target (defaults to *repo_base_url*); package hrefs are always joined
+    warm target (defaults to *repo_base_url*); all returned hrefs are joined
     against *repo_base_url*, which is what gets cached.
     """
     fetch_bytes, open_stream = _resolve_source(source)
     metadata_base = _with_trailing_slash(metadata_base_url or repo_base_url)
     repo_base = _with_trailing_slash(repo_base_url)
 
-    repomd_bytes = fetch_bytes(urljoin(metadata_base, REPOMD_PATH))
+    repomd_bytes = fetch_bytes(repomd_url(metadata_base))
     locations = parse_repomd(repomd_bytes)
     if "primary" not in locations:
         raise RepoMetadataError(
             "repomd.xml has no 'primary' metadata; cannot enumerate packages"
         )
+
+    # Metadata first: it's what a client requests first, and it's a handful of
+    # URLs against 100k+ packages.
+    warm_urls = [encode_url_path(urljoin(repo_base, REPOMD_PATH))]
+    warm_urls += [encode_url_path(urljoin(repo_base, href)) for href in locations.values()]
 
     primary_href = locations["primary"]
     # Reject an unreadable codec from the href alone, before spending a request
@@ -192,8 +213,9 @@ def discover_package_urls(
         # whole compressed primary is never held in memory at once.
         with open_stream(primary_url) as response:
             stream = _decompress_primary(response, primary_href)
-            return [encode_url_path(urljoin(repo_base, href)) for href in iter_package_hrefs(stream)]
-
-    # Buffered path: callers that only provide a bytes-fetcher.
-    stream = _decompress_primary(io.BytesIO(fetch_bytes(primary_url)), primary_href)
-    return [encode_url_path(urljoin(repo_base, href)) for href in iter_package_hrefs(stream)]
+            warm_urls += (encode_url_path(urljoin(repo_base, href)) for href in iter_package_hrefs(stream))
+    else:
+        # Buffered path: callers that only provide a bytes-fetcher.
+        stream = _decompress_primary(io.BytesIO(fetch_bytes(primary_url)), primary_href)
+        warm_urls += (encode_url_path(urljoin(repo_base, href)) for href in iter_package_hrefs(stream))
+    return warm_urls

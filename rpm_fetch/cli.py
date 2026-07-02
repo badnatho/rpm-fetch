@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     out = parser.add_argument_group("scope and output")
     out.add_argument("--limit", type=_bounded_int(0), metavar="N",
-                     help="Only process the first N packages (for testing).")
+                     help="Only process the first N URLs (metadata files come first; for testing).")
     out.add_argument("--dry-run", action="store_true", help="Print the package URLs that would be warmed, then exit.")
     out.add_argument("--verbose", action="store_true", help="Print a line for every request.")
     out.add_argument("--quiet", action="store_true", help="Only print the final summary and errors.")

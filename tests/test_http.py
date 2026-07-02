@@ -163,6 +163,20 @@ class GetBytesRetryCloseTests(unittest.TestCase):
         )
         self.assertEqual(client.get_bytes("https://art/primary.xml.gz"), b"OK")
 
+    def test_oversized_body_is_rejected(self):
+        import rpm_fetch.http as http_mod
+
+        original = http_mod._MAX_BUFFERED_BYTES
+        http_mod._MAX_BUFFERED_BYTES = 8
+        try:
+            client = HttpClient(retries=0, sleep=lambda _s: None)
+            client._opener = self._ScriptedOpener([self._SuccessResponse(b"X" * 9)])
+            with self.assertRaises(OSError) as ctx:
+                client.get_bytes("https://art/repomd.xml")
+            self.assertIn("refusing to buffer", str(ctx.exception))
+        finally:
+            http_mod._MAX_BUFFERED_BYTES = original
+
 
 class RetriesClampTests(unittest.TestCase):
     """A negative retries value must not make the attempt loop empty."""
@@ -181,6 +195,56 @@ class RetriesClampTests(unittest.TestCase):
         client._opener = _AlwaysFails()
         with self.assertRaises(urllib.error.URLError):
             client.get_bytes("https://art/x")
+
+
+class RetryDelayTests(unittest.TestCase):
+    """Retry pacing: server-driven (Retry-After) or jittered exponential backoff."""
+
+    def _run_one_retry(self, err, jitter=lambda backoff: 0.0, backoff_base=0.5):
+        sleeps: list[float] = []
+        client = HttpClient(retries=1, sleep=sleeps.append, jitter=jitter, backoff_base=backoff_base)
+        client._opener = RetryBehaviourTests._ScriptedOpener([err, 200])
+        result = client.warm_one("https://art/pkg.rpm")
+        self.assertTrue(result.ok)
+        self.assertEqual(len(sleeps), 1)
+        return sleeps[0]
+
+    def test_retry_after_header_is_honored(self):
+        import urllib.error
+
+        err = urllib.error.HTTPError("https://art/x", 429, "Too Many", {"Retry-After": "7"}, None)
+        self.assertEqual(self._run_one_retry(err), 7.0)
+
+    def test_retry_after_is_capped(self):
+        import urllib.error
+
+        err = urllib.error.HTTPError("https://art/x", 503, "Busy", {"Retry-After": "3600"}, None)
+        self.assertEqual(self._run_one_retry(err), 60.0)
+
+    def test_unparsable_retry_after_falls_back_to_backoff(self):
+        import urllib.error
+
+        err = urllib.error.HTTPError(
+            "https://art/x", 503, "Busy", {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, None
+        )
+        self.assertEqual(self._run_one_retry(err, backoff_base=0.5), 0.5)
+
+    def test_jitter_is_added_to_backoff(self):
+        import urllib.error
+
+        err = urllib.error.URLError("down")  # no headers -> backoff + jitter path
+        delay = self._run_one_retry(err, jitter=lambda backoff: backoff / 2, backoff_base=0.5)
+        self.assertEqual(delay, 0.75)  # 0.5 backoff + 0.25 jitter
+
+    def test_default_jitter_is_bounded(self):
+        import urllib.error
+
+        err = urllib.error.URLError("down")
+        sleeps: list[float] = []
+        client = HttpClient(retries=1, sleep=sleeps.append)  # default (random) jitter
+        client._opener = RetryBehaviourTests._ScriptedOpener([err, 200])
+        client.warm_one("https://art/pkg.rpm")
+        self.assertTrue(0.5 <= sleeps[0] <= 0.75)  # backoff .. backoff * 1.5
 
 
 class OriginTests(unittest.TestCase):

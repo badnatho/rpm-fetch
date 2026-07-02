@@ -30,9 +30,10 @@ RUN python -m venv /opt/venv \
 ############################
 FROM python:3.14-slim AS runtime
 
+# No version label here: the version is single-sourced in rpm_fetch/__init__.py
+# (CI's metadata-action attaches version labels on tagged builds).
 LABEL org.opencontainers.image.title="rpm-fetch" \
       org.opencontainers.image.description="Warm an Artifactory cache from an RPM repository's metadata via HEAD requests." \
-      org.opencontainers.image.version="0.1.0" \
       org.opencontainers.image.licenses="MIT"
 
 # PATH points at the copied venv; unbuffered so progress (printed to stderr)

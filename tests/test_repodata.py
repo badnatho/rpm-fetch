@@ -63,6 +63,13 @@ class ParseRepomdTests(unittest.TestCase):
         with self.assertRaises(RepoMetadataError):
             parse_repomd(b"not xml <<<")
 
+    def test_html_response_gets_a_helpful_message(self):
+        # e.g. a suspended JFrog trial 302s to an HTML landing page.
+        html = b'<!DOCTYPE html><html lang="en"><head><title>JFrog Landing</title></head></html>'
+        with self.assertRaises(RepoMetadataError) as ctx:
+            parse_repomd(html)
+        self.assertIn("HTML page", str(ctx.exception))
+
     def test_rejects_empty_repomd(self):
         with self.assertRaises(RepoMetadataError):
             parse_repomd(b'<repomd xmlns="http://linux.duke.edu/metadata/repo"/>')
@@ -94,11 +101,15 @@ class DiscoverPackageUrlsTests(unittest.TestCase):
 
         return fetch
 
-    def test_resolves_absolute_package_urls(self):
+    def test_resolves_metadata_then_package_urls(self):
         urls = discover_package_urls(self._fetcher(PRIMARY), "https://art/repo/")
         self.assertEqual(
             urls,
             [
+                # Metadata first: repomd.xml itself, then every repomd location.
+                "https://art/repo/repodata/repomd.xml",
+                "https://art/repo/repodata/abc-primary.xml.gz",
+                "https://art/repo/repodata/def-filelists.xml.gz",
                 "https://art/repo/Packages/f/foo-1.0-1.el9.x86_64.rpm",
                 "https://art/repo/Packages/b/bar-2.0-1.el9.noarch.rpm",
             ],
@@ -118,9 +129,8 @@ class DiscoverPackageUrlsTests(unittest.TestCase):
             return REPOMD if url.endswith("repomd.xml") else gzip.compress(primary)
 
         urls = discover_package_urls(fetch, "https://art/repo/")
-        self.assertEqual(
-            urls, ["https://art/repo/Packages/c/crontabs-1.11%5E2019-6.el10.noarch.rpm"]
-        )
+        self.assertIn("https://art/repo/Packages/c/crontabs-1.11%5E2019-6.el10.noarch.rpm", urls)
+        self.assertNotIn("https://art/repo/Packages/c/crontabs-1.11^2019-6.el10.noarch.rpm", urls)
 
     def test_separate_metadata_base_warms_repo_base(self):
         # Metadata read from mirror/, but package URLs must target repo/.
@@ -137,6 +147,9 @@ class DiscoverPackageUrlsTests(unittest.TestCase):
         urls = discover_package_urls(fetch, "https://art/repo/", "https://mirror/upstream/")
         self.assertTrue(all(u.startswith("https://art/repo/") for u in urls))
         self.assertTrue(any(c.startswith("https://mirror/upstream/") for c in calls))
+        # The warm target's own metadata is included even though repodata was
+        # read from the mirror — that's the point of warming.
+        self.assertIn("https://art/repo/repodata/repomd.xml", urls)
 
     def test_missing_primary_raises(self):
         def fetch(url: str) -> bytes:
@@ -226,12 +239,13 @@ class DiscoverPackageUrlsTests(unittest.TestCase):
 
         urls = discover_package_urls(FakeClient(), "https://art/repo/")
         self.assertEqual(
-            urls,
+            urls[-2:],
             [
                 "https://art/repo/Packages/f/foo-1.0-1.el9.x86_64.rpm",
                 "https://art/repo/Packages/b/bar-2.0-1.el9.noarch.rpm",
             ],
         )
+        self.assertIn("https://art/repo/repodata/repomd.xml", urls)
         self.assertEqual(len(streamed), 1)
         self.assertTrue(streamed[0].endswith("-primary.xml.gz"))
 
