@@ -11,7 +11,7 @@ readme = "README.md"
 # 3.14 is the floor: it is the first release to ship `compression.zstd` in the
 # stdlib, which lets us read zstd-compressed repodata with zero dependencies.
 requires-python = ">=3.14"
-license = "MIT"
+license = "GPL-3.0-only"
 authors = [{ name = "Nathan Towell", email = "nathan.j.towell@protonmail.com" }]
 keywords = ["rpm", "yum", "dnf", "artifactory", "repodata", "cache"]
 dependencies = []

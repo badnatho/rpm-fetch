@@ -34,7 +34,11 @@ FROM python:3.14-slim AS runtime
 # (CI's metadata-action attaches version labels on tagged builds).
 LABEL org.opencontainers.image.title="rpm-fetch" \
       org.opencontainers.image.description="Warm an Artifactory cache from an RPM repository's metadata via HEAD requests." \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="GPL-3.0-only"
+
+# GPLv3 requires conveying the license text with the program; an image is a
+# distribution, so ship it at the conventional OCI location.
+COPY LICENSE /licenses/LICENSE
 
 # PATH points at the copied venv; unbuffered so progress (printed to stderr)
 # streams live under `docker logs`; no .pyc writes as a read-only user.
